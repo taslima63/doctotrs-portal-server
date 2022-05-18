@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const { MongoClient, ServerApiVersion } = require('mongodb');
+const { response } = require('express');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -37,7 +38,7 @@ async function run() {
         const bookingCollection = client.db('doctors_portal').collection('bookings');
         const userCollection = client.db('doctors_portal').collection('users');
 
-
+        //get all services from db
         app.get('/service', async (req, res) => {
             const query = {};
             const cursor = servicesCollection.find(query);
@@ -45,15 +46,13 @@ async function run() {
             res.send(services);
         })
 
+        // get the available slots
         app.get('/available', async (req, res) => {
             const date = req.query.date;
-            console.log(req.query);
-            console.log(date);
             const services = await servicesCollection.find().toArray();
 
             const query = { date: date };
             const bookings = await bookingCollection.find(query).toArray();
-            console.log(bookings);
 
             services.forEach(service => {
                 const serviceBookings = bookings.filter(book => book.treatment === service.name);
@@ -63,10 +62,9 @@ async function run() {
             })
             res.send(services);
         })
-
+        //  make sure that one user can't see other userr's info
         app.get('/booking', verifyJWT, async (req, res) => {
             const patient = req.query.patient;
-
             const decodedEmail = req.decoded.email;
             if (patient === decodedEmail) {
                 const query = { patient: patient };
@@ -78,12 +76,41 @@ async function run() {
             }
         })
 
-        app.get('/user', async (req, res) => {
+        // get all the user
+        app.get('/user', verifyJWT, async (req, res) => {
             const users = await userCollection.find().toArray();
             res.send(users);
         })
 
 
+        app.get('/admin/:email', verifyJWT, async (req, res) => {
+            const email = req.params.email;
+            const user = await userCollection.findOne({ email: email });
+            const isAdmin = user.role === 'admin';
+            res.send({ admin: isAdmin });
+        })
+
+        //  add admin role to a user document through api request from client
+        app.put('/user/admin/:email', verifyJWT, async (req, res) => {
+            const email = req.params.email;
+            const requester = req.decoded.email;
+            const requesterAccount = await userCollection.findOne({ email: requester });// to find which user sent the request
+            if (requesterAccount.role === 'admin') {
+                const filter = { email: email };
+                const updateDoc = {
+                    $set: { role: 'admin' },
+                };
+                const result = await userCollection.updateOne(filter, updateDoc);
+                const token = jwt.sign({ email: email }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '72h' })
+                res.send({ result, token });
+            }
+            else {
+                response.status(403).send({ message: 'forbidden access!' });
+            }
+
+        })
+
+        // assign token to a user
         app.put('/user/:email', async (req, res) => {
             const email = req.params.email;
             const user = req.body;
@@ -97,6 +124,7 @@ async function run() {
             res.send({ result, token });
         })
 
+        // insert booking info in db through api request from client side
         app.post('/booking', async (req, res) => {
             const booking = req.body;
             const query = { treatment: booking.treatment, date: booking.date, patient: booking.patient }
